@@ -253,21 +253,249 @@ export const TRACK_DEFS = [
         .straight(4)
         .finish(),
   },
+  {
+    id: 'summer-4',
+    build: () =>
+      new TrackChain('Summer 4 · Riverside', 'summer')
+        .start()
+        .straight(2)
+        .chicaneLeft()
+        .straight(2)
+        .bankRight()
+        .straight(2)
+        .cp()
+        .bumps()
+        .straight(1)
+        .bankLeft()
+        .straight(2)
+        .chicaneRight()
+        .straight(1)
+        .cp()
+        .wideRight()
+        .boost()
+        .straight(2)
+        .finish(),
+  },
+  {
+    id: 'summer-5',
+    build: () =>
+      new TrackChain('Summer 5 · Big Air', 'summer')
+        .start()
+        .straight(2)
+        .boost()
+        .straight(1)
+        .ramp()
+        .gap(4)
+        .platform(3)
+        .straight(2)
+        .cp()
+        .wallLeft()
+        .straight(2)
+        .boost()
+        .loop()
+        .straight(2)
+        .cp()
+        .bankRight()
+        .straight(1)
+        .boost()
+        .ramp()
+        .gap(4)
+        .platform(3)
+        .straight(2)
+        .finish(),
+  },
+  {
+    id: 'winter-3',
+    build: () =>
+      new TrackChain('Winter 3 · Black Ice', 'winter')
+        .start()
+        .straight(2)
+        .ice(3)
+        .straight(1)
+        .wideRight()
+        .straight(1)
+        .cp()
+        .ice(2)
+        .straight(1)
+        .bankLeft()
+        .straight(1)
+        .ice(2)
+        .straight(2)
+        .cp()
+        .right()
+        .straight(1)
+        .ice(2)
+        .straight(2)
+        .finish(),
+  },
+  {
+    id: 'winter-4',
+    build: () =>
+      new TrackChain('Winter 4 · Glacier Run', 'winter')
+        .start()
+        .straight(1)
+        .tunnel(3)
+        .straight(1)
+        .up()
+        .straight(2)
+        .cp()
+        .wallRight()
+        .straight(1)
+        .down()
+        .straight(1)
+        .tunnel(2)
+        .straight(1)
+        .cp()
+        .bankLeft()
+        .straight(2)
+        .ice(2)
+        .straight(1)
+        .bumps()
+        .straight(2)
+        .finish(),
+  },
+  {
+    id: 'desert-3',
+    build: () =>
+      new TrackChain('Desert 3 · Rally Raid', 'desert')
+        .start()
+        .straight(1)
+        .dirt(3)
+        .chicaneRight()
+        .dirt(2)
+        .bumps()
+        .cp()
+        .wideLeft()
+        .dirt(2)
+        .bumps()
+        .straight(1)
+        .cp()
+        .bankRight()
+        .dirt(2)
+        .chicaneLeft()
+        .dirt(2)
+        .finish(),
+  },
+  {
+    id: 'desert-4',
+    build: () =>
+      new TrackChain('Desert 4 · Canyon Wall', 'desert')
+        .start()
+        .straight(2)
+        .boost()
+        .straight(1)
+        .wallLeft()
+        .straight(1)
+        .boost()
+        .ramp()
+        .gap(4)
+        .platform(3)
+        .straight(1)
+        .cp()
+        .wallLeft()
+        .straight(2)
+        .upShort()
+        .straight(2)
+        .cp()
+        .bankRight()
+        .downShort()
+        .boost()
+        .straight(3)
+        .finish(),
+  },
+  {
+    id: 'summer-6',
+    build: () =>
+      new TrackChain('Summer 6 · Concrete Jungle', 'summer')
+        .start()
+        .straight(1)
+        .tunnel(2)
+        .block(2)
+        .straight(1)
+        .cp()
+        .right()
+        .tunnel(2)
+        .chicaneLeft()
+        .straight(1)
+        .upShort()
+        .block(2)
+        .downShort()
+        .straight(1)
+        .cp()
+        .left()
+        .straight(1)
+        .boost()
+        .tunnel(2)
+        .straight(2)
+        .finish(),
+  },
+  {
+    id: 'grand-prix',
+    build: () =>
+      new TrackChain('Finale · Grand Prix', 'desert')
+        .start()
+        .straight(2)
+        .boost()
+        .straight(1)
+        .loop()
+        .straight(1)
+        .cp()
+        .wallRight()
+        .straight(1)
+        .chicaneLeft()
+        .dirt(2)
+        .cp()
+        .bankLeft()
+        .ice(2)
+        .straight(1)
+        .bumps()
+        .cp()
+        .right()
+        .straight(1)
+        .boost()
+        .ramp()
+        .gap(4)
+        .platform(3)
+        .straight(1)
+        .cp()
+        .wideRight()
+        .tunnel(2)
+        .boost()
+        .loop(true)
+        .straight(3)
+        .finish(),
+  },
 ];
 
 // Medal times (seconds). Filled in from autopilot runs; see tests/run.js.
 const MEDALS = {
-  'summer-1': 14.15,
-  'summer-2': 15.4,
-  'summer-3': 17.65,
-  'winter-1': 17.3,
-  'winter-2': 17.4,
-  'desert-1': 19.5,
-  'desert-2': 24.05,
-  'grand-tour': 28.25,
+  'summer-1': 14.25,
+  'summer-2': 15.5,
+  'summer-3': 17.7,
+  'summer-4': 14.9,
+  'summer-5': 16.85,
+  'summer-6': 12.95,
+  'winter-1': 17.4,
+  'winter-2': 17.45,
+  'winter-3': 13.7,
+  'winter-4': 13.6,
+  'desert-1': 19.95,
+  'desert-2': 24.2,
+  'desert-3': 14.75,
+  'desert-4': 15.2,
+  'grand-tour': 28.4,
+  'grand-prix': 24.5,
 };
 
-export const BUILTIN_TRACKS = TRACK_DEFS.map((d) => {
+const ORDER = [
+  'summer-1', 'summer-2', 'summer-3', 'summer-4', 'summer-5', 'summer-6',
+  'winter-1', 'winter-2', 'winter-3', 'winter-4',
+  'desert-1', 'desert-2', 'desert-3', 'desert-4',
+  'grand-tour', 'grand-prix',
+];
+
+export const BUILTIN_TRACKS = ORDER.map((id) => {
+  const d = TRACK_DEFS.find((t) => t.id === id);
   const track = d.build().build();
   return { ...track, id: d.id, builtin: true, medals: medals(MEDALS[d.id]) };
 });

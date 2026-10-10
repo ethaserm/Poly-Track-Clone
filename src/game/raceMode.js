@@ -2,25 +2,21 @@ import * as THREE from 'three';
 import { Bot } from '../core/bot.js';
 import { GHOST_HZ, PHYSICS_DT, PHYSICS_HZ } from '../core/constants.js';
 import { RaceSim } from '../core/race.js';
-import { compileTrack, occupiedCells } from '../core/track.js';
-import { CarModel } from './carModel.js';
-import { Effects, SpeedLines } from './effects.js';
 import { CAMERA_MODES, ChaseCamera } from './chaseCamera.js';
-import { THEMES, buildEnvironment, seedFrom } from './environment.js';
-import { themeEnvMap } from './renderer.js';
-import { Hud, MEDALS, formatTime, medalFor, medalIcon } from './hud.js';
+import { SpeedLines } from './effects.js';
+import { FLAG_BOOST, FLAG_BRAKE, FLAG_REVERSE, GHOST_STRIDE, GhostRecorder, decodeGhost, ghostTimeAt, sampleGhost } from './ghost.js';
+import { Hud, MEDALS, Minimap, UNITS, formatTime, gearState, medalFor, medalIcon } from './hud.js';
 import { isTouchDevice } from './input.js';
-import { b64ToFloats, floatsToB64, loadRecord, saveRecord } from './storage.js';
-import { TrackView } from './trackView.js';
+import { addRun, floatsToB64, loadRecord, loadRuns, saveRecord, trackKey, updateStats } from './storage.js';
+import { TrackScene, trackLines } from './trackScene.js';
 import { escapeHtml, openPanel } from './ui.js';
 
-const GHOST_EVERY = PHYSICS_HZ / GHOST_HZ;
+export { occupiedSet } from './trackScene.js';
 
-export function occupiedSet(track) {
-  const set = new Set();
-  for (const pc of track.pieces) for (const c of occupiedCells(pc)) set.add(`${c.x},${c.z}`);
-  return set;
-}
+const GHOST_EVERY = PHYSICS_HZ / GHOST_HZ;
+const _gp = new THREE.Vector3();
+const _gq = new THREE.Quaternion();
+const _v = new THREE.Vector3();
 
 /**
  * A playable race on one track (also used as the animated menu background in demo mode,
@@ -33,50 +29,25 @@ export class RaceMode {
     this.demo = demo;
     this.fromEditor = fromEditor;
     const settings = app.settings;
-    const shadows = app.quality.shadows;
 
-    this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(70, app.aspect, 0.1, 5000);
-    this.compiled = compileTrack(track);
-    this.env = buildEnvironment(track.env, {
-      compiled: this.compiled,
-      occupied: occupiedSet(track),
-      seed: seedFrom(track.name || 'track'),
-      shadows,
-      quality: app.quality,
-    });
-    this.scene.add(this.env.group);
-    this.scene.fog = this.env.fog;
-
-    this.view = new TrackView(this.compiled, { shadows });
-    this.scene.add(this.view.group);
-
-    this.envMap = themeEnvMap(app.renderer, THEMES[track.env] || THEMES.summer, track.env || 'summer');
-    this.carModel = new CarModel({
-      color: settings.carColor,
-      accent: settings.accentColor,
-      rim: settings.rimColor,
-      livery: settings.livery,
-      number: settings.carNumber,
-      shadows,
-      envMap: this.envMap,
-    });
-    this.scene.add(this.carModel.group);
-    this.ghostModel = new CarModel({ ghost: true, color: '#ffffff', accent: '#9aa3b5', rim: '#ffffff', livery: 'plain' });
-    this.ghostModel.group.visible = false;
-    this.scene.add(this.ghostModel.group);
+    this.ts = new TrackScene(app, track);
+    this.scene = this.ts.scene;
+    this.camera = this.ts.camera;
+    this.compiled = this.ts.compiled;
+    this.view = this.ts.view;
+    this.effects = this.ts.effects;
+    this.carModel = this.ts.createPlayerCar();
+    this.ghostModel = this.ts.createGhostCar();
 
     this.sim = new RaceSim(this.compiled);
     this.chase = new ChaseCamera(this.camera);
     this.chase.setMode(demo ? 0 : settings.camera);
     this.chase.fovOffset = settings.fovOffset || 0;
     this.chase.shakeEnabled = settings.cameraShake && !demo;
-    this.effects = new Effects(this.scene, { env: track.env, quality: app.quality.particles, skidmarks: settings.skidmarks });
     this.speedLines = new SpeedLines();
-    this.scene.add(this.camera);
     this.camera.add(this.speedLines.lines);
-    this.boostLevel = 0;
 
+    this.rec = new GhostRecorder();
     this.prevPos = new THREE.Vector3();
     this.prevQuat = new THREE.Quaternion();
     this.acc = 0;
@@ -84,16 +55,26 @@ export class RaceMode {
     this.panel = null;
     this.impactCooldown = 0;
     this.finishOrbit = 0;
+    this.boostLevel = 0;
+    this.ghostHint = 0;
+    this.liveTimer = 0;
+    this.stat = this.freshStats();
 
     if (demo) {
       this.bot = this.compiled.driveLine ? new Bot(this.compiled.driveLine) : null;
+      this.demoCam = { mode: 0, t: 0, pos: new THREE.Vector3() };
     } else {
       this.record = loadRecord(track);
-      this.loadGhost();
-      this.hud = new Hud(app.uiRoot);
+      this.ghost = decodeGhost(this.record);
+      this.hud = new Hud(app.uiRoot, { units: settings.units, minimap: settings.minimap });
       this.hud.setTrack(track, this.record?.time);
+      this.minimap = new Minimap(this.hud.minimap, trackLines(track), {
+        triggers: this.compiled.triggers,
+        spawn: this.compiled.spawn?.pos,
+      });
       if (isTouchDevice()) app.input.attachTouch(app.uiRoot);
       app.audio.startEngine();
+      app.audio.playMusic('race');
       this._onVisibility = () => {
         if (document.hidden && !this.sim.finished) this.pause();
       };
@@ -102,15 +83,25 @@ export class RaceMode {
     this.restart();
   }
 
-  loadGhost() {
-    this.ghost = null;
-    if (this.record?.ghost) {
-      try {
-        this.ghost = b64ToFloats(this.record.ghost);
-      } catch {
-        this.ghost = null;
-      }
-    }
+  freshStats() {
+    return { distance: 0, driveTime: 0, airTime: 0, respawns: 0, checkpoints: 0, topSpeed: 0, longestJump: 0 };
+  }
+
+  /** Push accumulated driving stats into the persistent player stats. */
+  flushStats(extra = {}) {
+    if (this.demo) return;
+    const s = this.stat;
+    updateStats({
+      distance: s.distance,
+      driveTime: s.driveTime,
+      airTime: s.airTime,
+      respawns: s.respawns,
+      checkpoints: s.checkpoints,
+      topSpeed: s.topSpeed,
+      longestJump: s.longestJump,
+      ...extra,
+    });
+    this.stat = this.freshStats();
   }
 
   /** Let the autopilot drive this race (debug / testing aid: window.__app.mode.enableAutopilot()). */
@@ -122,37 +113,45 @@ export class RaceMode {
   }
 
   restart() {
+    if (!this.demo && this.sim.started && !this.sim.finished) this.flushStats({ restarts: 1 });
     this.sim.restart();
     this.effects?.clear();
     this.view.resetCheckpoints();
     this.view.setStartLights('red');
-    this.ghostRec = [];
+    this.rec.reset();
     this.recordGhostFrame();
     this.acc = 0;
     this.prevPos.copy(this.sim.car.pos);
     this.prevQuat.copy(this.sim.car.quat);
     this.chase.snap(this.sim.car.pos, this.sim.car.quat);
     this.finishOrbit = 0;
+    this.ghostHint = 0;
+    this.runTopSpeed = 0;
     this.bot?.reset();
     this.closePanel();
     if (this.hud) {
       this.hud.setTime(0);
+      this.hud.setLiveDelta(null);
       this.hud.setCheckpoints(0, this.compiled.checkpointCount);
+      this.hud.setRespawns(0);
       this.hud.clearSplit();
       this.hud.clearMessage();
       const keys = this.app.input.lastDevice === 'gamepad' ? 'RT' : this.app.input.lastDevice === 'touch' ? '▲' : '↑ / W';
       this.hud.hint(
-        this.compiled.finishCount === 0
-          ? `This track has no finish yet · drive with ${keys}`
-          : `Press <b>${keys}</b> to start`,
+        this.compiled.finishCount === 0 ? `This track has no finish yet · drive with ${keys}` : `Press <b>${keys}</b> to start`,
       );
     }
     this.app.input.clearActions();
   }
 
   recordGhostFrame() {
-    const { pos, quat } = this.sim.car;
-    this.ghostRec.push(pos.x, pos.y, pos.z, quat.x, quat.y, quat.z, quat.w);
+    const input = this.lastInput || { brake: 0 };
+    const fwd = this.sim.car.forwardSpeed;
+    let flags = 0;
+    if (input.brake > 0 && fwd > 0.5) flags |= FLAG_BRAKE;
+    if (input.brake > 0 && fwd < -0.3) flags |= FLAG_REVERSE;
+    if (this.sim.car.onBoost) flags |= FLAG_BOOST;
+    this.rec.push(this.sim.car, flags);
   }
 
   respawn() {
@@ -162,6 +161,8 @@ export class RaceMode {
       return;
     }
     this.sim.respawn();
+    this.stat.respawns++;
+    this.hud?.setRespawns(this.sim.respawns);
     this.prevPos.copy(this.sim.car.pos);
     this.prevQuat.copy(this.sim.car.quat);
     this.chase.snap(this.sim.car.pos, this.sim.car.quat);
@@ -188,13 +189,14 @@ export class RaceMode {
     this.panel = openPanel(
       this.app.uiRoot,
       `<h2>Paused</h2>
-       <div class="panel-sub">${escapeHtml(this.track.name)}</div>
+       <div class="panel-sub">${escapeHtml(this.track.name)} · ${formatTime(this.sim.time)}</div>
        <div class="btn-col">
          <button class="btn primary" data-action="resume">Resume</button>
          <button class="btn" data-action="restart">Restart <kbd>T</kbd></button>
          <button class="btn" data-action="camera">Camera: <b>${CAMERA_MODES[this.chase.mode].name}</b> <kbd>C</kbd></button>
          <button class="btn" data-action="ghost">Ghost: <b>${s.ghost ? 'On' : 'Off'}</b> <kbd>G</kbd></button>
          <button class="btn" data-action="sound">Sound: <b>${s.sound ? 'On' : 'Off'}</b> <kbd>M</kbd></button>
+         ${this.ghost ? '<button class="btn" data-action="replay">Watch best run</button>' : ''}
          <button class="btn" data-action="exit">${exitLabel}</button>
        </div>`,
       {
@@ -205,6 +207,7 @@ export class RaceMode {
           if (a === 'resume') this.resume();
           else if (a === 'restart') this.restart();
           else if (a === 'exit') this.exit();
+          else if (a === 'replay') this.watchReplay(this.ghost, this.record.time, 'Personal best');
           else {
             if (a === 'camera') this.cycleCamera();
             if (a === 'ghost') this.toggleGhost();
@@ -230,7 +233,13 @@ export class RaceMode {
   exit() {
     this.closePanel();
     if (this.fromEditor) this.app.openEditor(this.fromEditor);
-    else this.app.showMenu();
+    else this.app.showMenu(this.track.builtin ? 'play' : 'custom');
+  }
+
+  watchReplay(ghost, time, label) {
+    const track = this.track;
+    const opts = { fromEditor: this.fromEditor };
+    this.app.watchReplay(track, { ...ghost, time, label }, () => this.app.playTrack(track, opts));
   }
 
   cycleCamera() {
@@ -255,37 +264,62 @@ export class RaceMode {
     const isPB = !prev || time < prev.time;
     const medal = medalFor(time, this.track.medals);
     const prevMedal = prev ? medalFor(prev.time, this.track.medals) : null;
+    const runData = this.rec.toArray();
+    this.lastRun = { data: runData, stride: GHOST_STRIDE, frames: runData.length / GHOST_STRIDE };
+    this.flushStats({ racesFinished: 1, personalBests: isPB ? 1 : 0 });
+    const topSpeed = this.runTopSpeed || 0;
+    const run = { time, date: Date.now(), respawns: sim.respawns, topSpeed };
+    const rank = addRun(this.track, run);
     if (isPB) {
-      this.record = {
-        time,
-        splits,
-        ghost: floatsToB64(new Float32Array(this.ghostRec)),
-        date: Date.now(),
-      };
+      this.record = { time, splits, ghost: floatsToB64(runData), gv: 2, date: Date.now(), topSpeed, respawns: sim.respawns };
       saveRecord(this.track, this.record);
-      this.loadGhost();
+      this.ghost = decodeGhost(this.record);
       this.hud.setBest(time);
     }
     this.app.audio.finish(!!medal);
     this.hud.hint('');
     this.hud.clearSplit();
+    this.hud.setLiveDelta(null);
 
     let deltaHtml = '';
     if (!prev) deltaHtml = '<div class="finish-delta pb">First finish!</div>';
     else if (isPB)
       deltaHtml = `<div class="finish-delta pb">New personal best! <span class="faster">${formatTime(time - prev.time, { sign: true })}</span></div>`;
-    else deltaHtml = `<div class="finish-delta"><span class="slower">${formatTime(time - prev.time, { sign: true })}</span> vs PB ${formatTime(prev.time)}</div>`;
+    else
+      deltaHtml = `<div class="finish-delta"><span class="slower">${formatTime(time - prev.time, { sign: true })}</span> vs PB ${formatTime(prev.time)}</div>`;
 
     let medalHtml = '';
     if (this.track.medals) {
+      const best = isPB ? time : prev.time;
       medalHtml = `<div class="finish-medals">${MEDALS.map((m) => {
-        const got = this.record && this.record.time <= this.track.medals[m.key];
+        const got = best <= this.track.medals[m.key];
         return `<div class="fm ${got ? 'got' : ''}">${medalIcon(m, 16)}<span>${m.label}</span><b>${formatTime(this.track.medals[m.key])}</b></div>`;
       }).join('')}</div>`;
       if (medal && (!prevMedal || MEDALS.indexOf(medal) < MEDALS.indexOf(prevMedal))) {
         medalHtml = `<div class="medal-earned" style="--medal:${medal.color}">${medalIcon(medal, 26)} ${medal.label} medal!</div>` + medalHtml;
       }
     }
+
+    // Sector table: each checkpoint plus the finish, compared with the previous best.
+    const marks = [...splits, time];
+    const pbMarks = prev?.splits && prev.splits.length === splits.length ? [...prev.splits, prev.time] : null;
+    const rows = marks
+      .map((t, i) => {
+        const sector = t - (i ? marks[i - 1] : 0);
+        const pbSector = pbMarks ? pbMarks[i] - (i ? pbMarks[i - 1] : 0) : null;
+        const d = pbSector != null ? sector - pbSector : null;
+        const label = i === marks.length - 1 ? 'Finish' : `CP ${i + 1}`;
+        return `<tr><td>${label}</td><td>${formatTime(t)}</td><td>${formatTime(sector)}</td><td class="${d == null ? '' : d <= 0 ? 'faster' : 'slower'}">${d == null ? '—' : formatTime(d, { sign: true })}</td></tr>`;
+      })
+      .join('');
+    const u = UNITS[this.app.settings.units] || UNITS.kmh;
+    const runs = loadRuns(this.track).slice(0, 5);
+    const board = runs
+      .map(
+        (r, i) =>
+          `<li class="${r.date === run.date ? 'me' : ''}"><span class="rk">${i + 1}</span><span class="rt">${formatTime(r.time)}</span><span class="rd">${new Date(r.date).toLocaleDateString()}</span></li>`,
+      )
+      .join('');
     const next = !this.fromEditor && this.app.nextBuiltin(this.track);
     const exitLabel = this.fromEditor ? 'Back to editor' : 'Menu';
     setTimeout(() => {
@@ -294,26 +328,39 @@ export class RaceMode {
         this.app.uiRoot,
         `<h2>Finished</h2>
          <div class="panel-sub">${escapeHtml(this.track.name)}</div>
-         <div class="finish-time">${formatTime(time)}</div>
-         ${deltaHtml}
-         ${medalHtml}
+         <div class="finish-grid">
+           <div class="finish-main">
+             <div class="finish-time">${formatTime(time)}</div>
+             ${deltaHtml}
+             ${medalHtml}
+             <table class="sectors"><thead><tr><th></th><th>Time</th><th>Sector</th><th>vs PB</th></tr></thead><tbody>${rows}</tbody></table>
+             <div class="finish-stats">
+               <div><span>Top speed</span><b>${Math.round(topSpeed * u.factor)} ${u.label}</b></div>
+               <div><span>Respawns</span><b>${sim.respawns}</b></div>
+               <div><span>Rank</span><b>${rank ? '#' + rank : '—'}</b></div>
+             </div>
+           </div>
+           <div class="finish-board"><h3>Best runs</h3><ol>${board}</ol></div>
+         </div>
          <div class="btn-row">
            <button class="btn primary" data-action="retry">Retry <kbd>R</kbd></button>
+           <button class="btn" data-action="replay">Watch replay</button>
            ${next ? '<button class="btn" data-action="next">Next track</button>' : ''}
            <button class="btn" data-action="exit">${exitLabel}</button>
          </div>`,
         {
-          className: 'finish-panel',
+          className: 'finish-panel wide',
           focus: false,
           onAction: (a) => {
             this.app.audio.click();
             if (a === 'retry') this.restart();
+            else if (a === 'replay') this.watchReplay(this.lastRun, time, 'Your run');
             else if (a === 'next') this.app.playTrack(next);
             else if (a === 'exit') this.exit();
           },
         },
       );
-    }, 700);
+    }, 900);
   }
 
   // --- Main loop ------------------------------------------------------------------
@@ -350,7 +397,18 @@ export class RaceMode {
     else input = this.app.input.drive();
     this.lastInput = input;
     const events = sim.tick(input);
-    if (sim.started && !sim.finished && sim.ticks % GHOST_EVERY === 0) this.recordGhostFrame();
+    if (sim.started && !sim.finished) {
+      if (sim.ticks % GHOST_EVERY === 0) this.recordGhostFrame();
+      const st = this.stat;
+      st.distance += car.speed * PHYSICS_DT;
+      st.driveTime += PHYSICS_DT;
+      st.topSpeed = Math.max(st.topSpeed, car.speed);
+      this.runTopSpeed = Math.max(this.runTopSpeed || 0, car.speed);
+      if (!car.grounded) {
+        st.airTime += PHYSICS_DT;
+        st.longestJump = Math.max(st.longestJump, car.airTime);
+      }
+    }
     for (const e of events) this.handleEvent(e);
     if (this.demo && this.bot && sim.started && !sim.finished) {
       // Demo: recover if the autopilot ever falls off.
@@ -363,7 +421,13 @@ export class RaceMode {
 
   handleEvent(e) {
     if (this.demo) {
-      if (e.type === 'finish') setTimeout(() => !this.disposed && this.restart(), 2500);
+      if (e.type === 'start') this.view.setStartLights('green');
+      if (e.type === 'checkpoint') this.view.setCheckpoint(e.id, true);
+      if (e.type === 'finish') {
+        this.view.celebrate();
+        this.ts.env.cheer(4);
+        setTimeout(() => !this.disposed && this.restart(), 3000);
+      }
       return;
     }
     const hud = this.hud;
@@ -371,6 +435,7 @@ export class RaceMode {
       case 'start':
         hud.hint('');
         this.view.setStartLights('green');
+        updateStats({ racesStarted: 1, trackPlay: this.track.builtin ? this.track.id : trackKey(this.track) });
         setTimeout(() => !this.disposed && this.sim.started && this.view.setStartLights('off'), 2500);
         break;
       case 'checkpoint': {
@@ -378,6 +443,7 @@ export class RaceMode {
         const trig = this.compiled.triggers.find((t) => t.kind === 'checkpoint' && t.id === e.id);
         if (trig) this.effects.burst('checkpoint', { x: trig.center[0], y: trig.center[1] - 2, z: trig.center[2] });
         this.app.gfx.pulse(0x9fe8ff, 0.18);
+        this.stat.checkpoints++;
         const t = e.ticks * PHYSICS_DT;
         const pb = this.record?.splits?.[e.index];
         const delta = pb != null ? t - pb : null;
@@ -395,17 +461,44 @@ export class RaceMode {
         if (trig) this.effects.burst('finish', { x: trig.center[0], y: trig.center[1] - 3, z: trig.center[2] });
         this.app.gfx.pulse(0xffffff, 0.3);
         this.view.celebrate();
-        this.env.cheer(5);
+        this.ts.env.cheer(5);
         this.onFinish();
         break;
       }
     }
   }
 
+  updateDemoCamera(dt, pos, quat, car) {
+    const dc = this.demoCam;
+    dc.t += dt;
+    if (dc.t > 7) {
+      dc.t = 0;
+      dc.mode = (dc.mode + 1) % 3;
+      if (dc.mode === 1) {
+        // Trackside camera placed ahead of the car.
+        _v.set(0, 0, 1).applyQuaternion(quat);
+        const side = new THREE.Vector3(_v.z, 0, -_v.x).normalize().multiplyScalar(Math.random() < 0.5 ? 9 : -9);
+        dc.pos.copy(pos).addScaledVector(_v, Math.max(25, car.speed * 2.2)).add(side).add(new THREE.Vector3(0, 2.5, 0));
+      }
+      this.chase.snap(pos, quat);
+    }
+    if (dc.mode === 0) this.chase.update(dt, pos, quat, car.speed, car.grounded > 0);
+    else if (dc.mode === 1) {
+      this.camera.position.copy(dc.pos);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(pos);
+      const d = dc.pos.distanceTo(pos);
+      this.camera.fov = THREE.MathUtils.clamp(2400 / Math.max(10, d), 18, 60);
+      this.camera.updateProjectionMatrix();
+      if (d > 120) dc.t = 99;
+    } else this.chase.updateOrbit(dt * 1.6, pos, 11, 3.5);
+  }
+
   frame(dt) {
     if (!this.demo) this.handleActions();
     const sim = this.sim;
     const car = sim.car;
+    const settings = this.app.settings;
 
     if (!this.paused) {
       this.acc += Math.min(dt, 0.1);
@@ -424,62 +517,69 @@ export class RaceMode {
       dt,
     );
     if (!this.paused) {
-      const scale = this.app.gfx.renderer.getDrawingBufferSize(_tmpV2).y / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)));
-      const fx = this.effects.update(dt, car, { throttle: input.throttle, brake: input.brake, boost: this.boostLevel, scale });
-      if (fx.landing) this.chase.addTrauma(Math.min(0.55, fx.landing * 0.035));
+      const fx = this.effects.update(dt, car, { throttle: input.throttle, brake: input.brake, boost: this.boostLevel, scale: this.ts.particleScale() });
+      if (fx.landing) {
+        this.chase.addTrauma(Math.min(0.55, fx.landing * 0.035));
+        if (!this.demo) this.app.audio.land?.(fx.landing);
+      }
       if (car.wallHit > 5) this.chase.addTrauma(Math.min(0.4, car.wallHit * 0.02));
     }
-    const speedFx = !this.demo && this.app.settings.speedEffects ? car.speed : 0;
-    this.speedLines.update(dt, speedFx);
-    this.app.gfx.setSpeedEffect(Math.min(1, Math.max(0, (speedFx - 48) / 40)) * 0.7);
 
     // Ghost playback.
-    const showGhost = !this.demo && this.app.settings.ghost && this.ghost && this.ghost.length >= 14;
+    const showGhost = !this.demo && settings.ghost && this.ghost;
     this.ghostModel.group.visible = !!showGhost;
+    let ghostPos = null;
     if (showGhost) {
-      const frames = this.ghost.length / 7;
-      const f = Math.min(frames - 1, sim.time * GHOST_HZ);
-      const i = Math.floor(f);
-      const j = Math.min(frames - 1, i + 1);
-      const k = f - i;
-      const g = this.ghost;
-      const p = this.ghostModel.group.position;
-      p.set(g[i * 7], g[i * 7 + 1], g[i * 7 + 2]).lerp(_tmpV.set(g[j * 7], g[j * 7 + 1], g[j * 7 + 2]), k);
-      _qa.set(g[i * 7 + 3], g[i * 7 + 4], g[i * 7 + 5], g[i * 7 + 6]);
-      _qb.set(g[j * 7 + 3], g[j * 7 + 4], g[j * 7 + 5], g[j * 7 + 6]);
-      this.ghostModel.group.quaternion.slerpQuaternions(_qa, _qb, k);
-      // Fade the ghost when it overlaps the player.
-      const d = p.distanceTo(this.carModel.group.position);
-      const op = Math.min(0.38, Math.max(0.08, (d - 1.5) * 0.08));
-      this.ghostModel.setOpacity(op);
+      const g = sampleGhost(this.ghost, sim.time, _gp, _gq);
+      this.ghostModel.setPose(_gp, _gq);
+      this.ghostModel.animateWheels(g.steer, g.speed, dt);
+      const d = _gp.distanceTo(this.carModel.group.position);
+      this.ghostModel.setOpacity(Math.min(0.38, Math.max(0.08, (d - 1.5) * 0.08)));
+      ghostPos = _gp;
     }
 
     // Camera.
     const pos = this.carModel.group.position;
     const quat = this.carModel.group.quaternion;
-    if (sim.finished && !this.demo) {
+    if (this.demo) this.updateDemoCamera(dt, pos, quat, car);
+    else if (sim.finished) {
       this.finishOrbit += dt;
       if (this.finishOrbit > 0.6) this.chase.updateOrbit(dt, pos);
       else this.chase.update(dt, pos, quat, car.speed, car.grounded > 0);
-    } else {
-      this.chase.update(dt, pos, quat, car.speed, car.grounded > 0);
-    }
-    this.env.update(pos, dt, this.camera);
-    this.view.update(dt);
+    } else this.chase.update(dt, pos, quat, car.speed, car.grounded > 0);
+    this.ts.update(dt, pos);
+
+    const speedFx = !this.demo && settings.speedEffects ? car.speed : 0;
+    this.speedLines.update(dt, speedFx);
+    this.app.gfx.setSpeedEffect(Math.min(1, Math.max(0, (speedFx - 48) / 40)) * 0.7);
 
     if (this.hud) {
       this.hud.setTime(sim.time);
-      this.hud.setSpeed(car.speed * 3.6);
+      this.hud.setSpeed(fwdSpeed, gearState(Math.abs(fwdSpeed)));
+      // Live gap to the PB ghost, refreshed ten times a second.
+      this.liveTimer -= dt;
+      if (this.liveTimer <= 0) {
+        this.liveTimer = 0.1;
+        if (this.ghost && sim.started && !sim.finished && sim.time > 0.5) {
+          const m = ghostTimeAt(this.ghost, car.pos, this.ghostHint);
+          this.ghostHint = m.index;
+          this.hud.setLiveDelta(m.dist < 25 ? sim.time - m.time : null);
+        } else if (!sim.finished) this.hud.setLiveDelta(null);
+      }
+      if (settings.minimap) this.minimap.draw({ pos: car.pos, fwd: car.fwd, color: settings.carColor }, ghostPos, sim.collected);
     }
 
     // Audio.
     if (!this.demo) {
       const audio = this.app.audio;
       audio.updateEngine({
-        speed: car.speed,
-        throttle: this.paused ? 0 : this.lastInput?.throttle || 0,
+        speed: Math.abs(fwdSpeed),
+        throttle: this.paused ? 0 : input.throttle || 0,
         grounded: car.grounded > 0,
         slip: car.slip,
+        boost: this.boostLevel,
+        scrape: car.scrape,
+        surface: car.wheels.find((w) => w.contact)?.surface ?? 0,
       });
       this.impactCooldown -= dt;
       if (car.wallHit > 6 && this.impactCooldown <= 0) {
@@ -488,16 +588,16 @@ export class RaceMode {
       }
     }
 
-    this.app.render(this.scene, this.camera, dt);
+    this.ts.render(dt);
   }
 
   resize(aspect) {
-    this.camera.aspect = aspect;
-    this.camera.updateProjectionMatrix();
+    this.ts.resize(aspect);
   }
 
   dispose() {
     this.disposed = true;
+    if (!this.demo && this.sim.started && !this.sim.finished) this.flushStats();
     this.closePanel();
     this.hud?.dispose();
     if (!this.demo) {
@@ -507,17 +607,8 @@ export class RaceMode {
     this.app.input.touchEl?.remove();
     this.app.input.touchEl = null;
     document.body.classList.remove('touch');
-    this.view.dispose();
-    this.effects.dispose();
     this.speedLines.dispose();
     this.app.gfx.setSpeedEffect(0);
-    this.env.dispose();
-    this.carModel.dispose();
-    this.ghostModel.dispose();
+    this.ts.dispose();
   }
 }
-
-const _tmpV = new THREE.Vector3();
-const _tmpV2 = new THREE.Vector2();
-const _qa = new THREE.Quaternion();
-const _qb = new THREE.Quaternion();

@@ -93,6 +93,81 @@ export function clearRecord(track) {
   remove('best.' + trackKey(track));
 }
 
+// --- Leaderboards (local top runs per track) -------------------------------------
+
+export function loadRuns(track) {
+  return read('runs.' + trackKey(track), []);
+}
+
+/** Adds a finished run; keeps the ten fastest. Returns the run's rank (1-based) or 0. */
+export function addRun(track, run) {
+  const list = loadRuns(track);
+  list.push(run);
+  list.sort((a, b) => a.time - b.time);
+  const kept = list.slice(0, 10);
+  write('runs.' + trackKey(track), kept);
+  const i = kept.indexOf(run);
+  return i >= 0 ? i + 1 : 0;
+}
+
+// --- Player statistics ---------------------------------------------------------
+
+export const EMPTY_STATS = {
+  racesStarted: 0,
+  racesFinished: 0,
+  distance: 0,
+  driveTime: 0,
+  respawns: 0,
+  restarts: 0,
+  topSpeed: 0,
+  airTime: 0,
+  longestJump: 0,
+  checkpoints: 0,
+  personalBests: 0,
+  trackPlays: {},
+};
+
+export function loadStats() {
+  return { ...EMPTY_STATS, ...read('stats', {}) };
+}
+
+/** Merge a delta into stats: numbers add, `max:` keys keep the maximum. */
+export function updateStats(delta) {
+  const s = loadStats();
+  for (const [k, v] of Object.entries(delta)) {
+    if (k === 'topSpeed' || k === 'longestJump') s[k] = Math.max(s[k] || 0, v);
+    else if (k === 'trackPlay') s.trackPlays[v] = (s.trackPlays[v] || 0) + 1;
+    else s[k] = (s[k] || 0) + v;
+  }
+  write('stats', s);
+  return s;
+}
+
+export function resetProgress() {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(PREFIX) && (k.includes('best.') || k.includes('runs.') || k.endsWith('stats'))) localStorage.removeItem(k);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+// --- Editor draft (autosave) ------------------------------------------------------
+
+export function saveDraft(track) {
+  write('editor.draft', { name: track.name, env: track.env, pieces: track.pieces, id: track.id || null, at: Date.now() });
+}
+
+export function loadDraft() {
+  return read('editor.draft', null);
+}
+
+export function clearDraft() {
+  remove('editor.draft');
+}
+
 // --- Custom tracks -----------------------------------------------------------
 
 export function loadCustomTracks() {

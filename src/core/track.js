@@ -267,6 +267,19 @@ export class TrackChain {
   longDown() { return this.reversed('slopeLong'); }
   ramp() { return this.piece('ramp'); }
   loop(mirror = false) { return this.piece('loop', mirror); }
+  bankLeft() { return this.piece('bankTurn'); }
+  bankRight() { return this.reversed('bankTurn'); }
+  wallLeft() { return this.piece('wallTurn'); }
+  wallRight() { return this.reversed('wallTurn'); }
+  chicaneLeft() { return this.piece('chicane'); }
+  chicaneRight() { return this.piece('chicane', true); }
+  bumps() { return this.piece('bumps'); }
+  upShort() { return this.piece('slopeShort'); }
+  downShort() { return this.reversed('slopeShort'); }
+  ice(n = 1) { return this.repeat(n, (c) => c.piece('ice')); }
+  dirt(n = 1) { return this.repeat(n, (c) => c.piece('dirt')); }
+  tunnel(n = 1) { return this.repeat(n, (c) => c.piece('tunnel')); }
+  block(n = 1) { return this.repeat(n, (c) => c.piece('block')); }
 
   /** Skip cells (for jumps). Optionally change level of the landing. */
   gap(n, dl = 0) {

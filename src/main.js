@@ -2,12 +2,14 @@ import { BUILTIN_TRACKS } from './core/tracks.js';
 import { decodeTrack } from './core/share.js';
 import { AudioFx } from './game/audio.js';
 import { EditorMode } from './game/editorMode.js';
+import { GarageMode } from './game/garageMode.js';
 import { Input } from './game/input.js';
 import { GameRenderer } from './game/renderer.js';
 import { MenuMode } from './game/menuMode.js';
 import { RaceMode } from './game/raceMode.js';
+import { ReplayMode } from './game/replayMode.js';
 import { loadSettings, saveCustomTrack, saveSettings } from './game/storage.js';
-import { toast } from './game/ui.js';
+import { escapeHtml, toast } from './game/ui.js';
 import './style.css';
 
 class App {
@@ -29,6 +31,7 @@ class App {
     this.audio = new AudioFx();
     this.audio.enabled = this.settings.sound;
     this.audio.volume = this.settings.volume;
+    this.audio.musicVolume = this.settings.musicVolume;
     const unlock = () => this.audio.ensure();
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
@@ -71,12 +74,32 @@ class App {
     this.fpsEl.style.display = this.settings.showFps ? '' : 'none';
   }
 
-  setMode(mode) {
+  setMode(mode, loadingText = null) {
     const old = this.mode;
     this.mode = null;
     old?.dispose();
-    this.mode = mode();
-    this.mode.resize?.(this.aspect);
+    if (!loadingText) {
+      this.mode = mode();
+      this.mode.resize?.(this.aspect);
+      return;
+    }
+    // Building a track takes a moment: show a loading card first.
+    const card = document.createElement('div');
+    card.className = 'loading';
+    card.innerHTML = `<div class="loading-inner"><div class="spinner"></div><div>${loadingText}</div></div>`;
+    this.uiRoot.appendChild(card);
+    const token = (this._loadToken = {});
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (this._loadToken !== token) return;
+        try {
+          this.mode = mode();
+          this.mode.resize?.(this.aspect);
+        } finally {
+          card.remove();
+        }
+      }),
+    );
   }
 
   showMenu(screen = 'main') {
@@ -85,11 +108,20 @@ class App {
 
   playTrack(track, opts = {}) {
     if (history.replaceState && location.hash) history.replaceState(null, '', location.pathname + location.search);
-    this.setMode(() => new RaceMode(this, track, opts));
+    this.setMode(() => new RaceMode(this, track, opts), `Loading ${escapeHtml(track.name || 'track')}…`);
   }
 
   openEditor(track) {
     this.setMode(() => new EditorMode(this, track));
+  }
+
+  openGarage() {
+    this.setMode(() => new GarageMode(this));
+  }
+
+  /** replay: { data, stride, frames, time, label }; onExit returns somewhere sensible. */
+  watchReplay(track, replay, onExit = null) {
+    this.setMode(() => new ReplayMode(this, track, replay, onExit), 'Loading replay…');
   }
 
   nextBuiltin(track) {

@@ -53,7 +53,10 @@ const BUMP_H = 0.42;
 const bumpsPath = (t) => [0, DECK + BUMP_H * Math.sin(Math.PI * 3 * t) ** 2, -H + TILE * 2 * t];
 
 const BANK = bankProfile(0.36);
-const WALL_BANK = bankProfile(1.2, 0.3);
+const WALL_BANK = bankProfile(1.0, 0.5);
+const WALL_R = TILE * 2 + H;
+const SQUARE3 = [];
+for (let x = 0; x < 3; x++) for (let z = 0; z < 3; z++) SQUARE3.push([x, z]);
 
 // ---------------------------------------------------------------------------
 // Piece catalogue
@@ -226,11 +229,11 @@ export const PIECES = {
   wallTurn: {
     name: 'Wall Ride',
     category: 'road',
-    description: 'Turn that tilts up to a near-vertical wall. Go fast or slide off!',
-    cells: SQUARE2,
-    height: 5,
-    exit: { dx: 2, dz: 1, dl: 0, dd: 1 },
-    sweeps: [{ path: bankedArcPath(TILE + H, -H, TILE + H, WALL_BANK), bank: WALL_BANK, segments: 32, dashes: true, noPillars: true }],
+    description: 'Huge 3×3 corner that tilts up into a steep wall. Carry speed!',
+    cells: SQUARE3,
+    height: 4,
+    exit: { dx: 3, dz: 2, dl: 0, dd: 1 },
+    sweeps: [{ path: bankedArcPath(WALL_R, -H, WALL_R, WALL_BANK), bank: WALL_BANK, segments: 40, dashes: true, noPillars: true }],
     support: true,
   },
   chicane: {
@@ -385,7 +388,11 @@ export function buildPieceLocal(type, mirror = false) {
 
   if (def.signs) addTurnSigns(mb, def.signs, mirror);
   if (def.tunnel) addTunnel(mb);
-  if (def.block) addBlock(mb);
+  if (def.block) {
+    addBlock(mb);
+    // Driving line across the top (used by the autopilot).
+    for (const f of sweepFrames(straightPath(), null, 4)) centerline.push({ ...f, surface: SURFACE.ROAD });
+  }
   if (def.support) addWallSupports(mb, def, mirror, pillars);
 
   const data = {
@@ -532,12 +539,12 @@ function addBlock(mb) {
 /** Buttresses holding up the outside of a wall-ride. */
 function addWallSupports(mb, def, mirror, pillars) {
   const sx = mirror ? -1 : 1;
-  const cx = TILE + H;
+  const cx = WALL_R;
   const cz = -H;
-  for (const t of [0.25, 0.5, 0.75]) {
+  for (const t of [0.2, 0.35, 0.5, 0.65, 0.8]) {
     const a = Math.PI - (t * Math.PI) / 2;
     const b = WALL_BANK(t);
-    const r = TILE + H + WALL_OUTER * Math.cos(b) + 0.5;
+    const r = WALL_R + WALL_OUTER * Math.cos(b) + 0.5;
     const x = (cx + r * Math.cos(a)) * sx;
     const z = cz + r * Math.sin(a);
     const h = DECK + Math.sin(b) * WALL_OUTER * 2;

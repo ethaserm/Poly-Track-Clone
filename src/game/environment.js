@@ -631,16 +631,18 @@ export function buildEnvironment(
 
   // --- Clouds ---------------------------------------------------------------------------
   const clouds = new THREE.Group();
-  const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, transparent: true, opacity: 0.94, emissive: 0x5a6a80, emissiveIntensity: 0.25 });
+  const cloudMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, transparent: true, opacity: 0.94, emissive: 0x5a6a80, emissiveIntensity: 0.25 });
   for (let i = 0; i < 26; i++) {
-    const c = new THREE.Group();
+    // One merged mesh per cloud keeps the draw-call count low.
     const n = 4 + Math.floor(rng() * 5);
+    const puffs = [];
     for (let k = 0; k < n; k++) {
-      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(12 + rng() * 14, 0), cloudMat);
-      m.position.set(k * 15 - n * 7.5, rng() * 7, rng() * 16 - 8);
-      m.scale.y = 0.55;
-      c.add(m);
+      const g = new THREE.IcosahedronGeometry(12 + rng() * 14, 0);
+      g.scale(1, 0.55, 1);
+      g.translate(k * 15 - n * 7.5, rng() * 7, rng() * 16 - 8);
+      puffs.push(colored(g, 0xffffff, 0.04, rng));
     }
+    const c = new THREE.Mesh(mergeColored(puffs), cloudMat);
     const a = rng() * Math.PI * 2;
     const d = 150 + rng() * 900;
     c.position.set(cx + Math.cos(a) * d, 160 + rng() * 140, cz + Math.sin(a) * d);

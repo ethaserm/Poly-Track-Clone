@@ -51,6 +51,15 @@ const features = {
   'mirrored loop after booster': new TrackChain('boostloop').start().straight(2).boost(2).straight(2).loop(true).straight(4).finish(),
   'ramp jump onto platforms': new TrackChain('jump').start().straight(6).ramp().gap(4).platform(4).straight(3).finish(),
   'checkpoints in sequence': new TrackChain('cps').start().straight(2).cp().straight(2).right().cp().straight(3).finish(),
+  'banked turns': new TrackChain('bank').start().straight(3).bankLeft().straight(2).bankRight().straight(3).finish(),
+  'wall rides': new TrackChain('wall').start().straight(2).boost(2).straight(1).wallLeft().straight(2).boost().wallRight().straight(3).finish(),
+  'chicanes': new TrackChain('chicane').start().straight(3).chicaneLeft().straight(1).chicaneRight().straight(3).finish(),
+  'bumps': new TrackChain('bumps').start().straight(3).bumps().straight(1).bumps().straight(3).finish(),
+  'short slopes': new TrackChain('short').start().straight(2).upShort().straight(2).upShort().straight(2).downShort().straight(2).downShort().straight(2).finish(),
+  'ice': new TrackChain('ice').start().straight(2).ice(4).right().ice(2).straight(2).finish(),
+  'dirt': new TrackChain('dirt').start().straight(2).dirt(4).wideLeft().dirt(2).straight(2).finish(),
+  'tunnels': new TrackChain('tunnel').start().straight(2).tunnel(3).straight(2).finish(),
+  'blocks': new TrackChain('block').start().straight(2).block(3).straight(2).finish(),
 };
 for (const [name, chain] of Object.entries(features)) {
   const r = runBot(chain.build(), { maxTime: 60 });
