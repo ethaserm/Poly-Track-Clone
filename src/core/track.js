@@ -1,6 +1,7 @@
 import { CollisionWorld } from './collision.js';
 import { DIRS, LEVEL, TILE, rotateXZ } from './constants.js';
 import { PIECES, buildPieceLocal, pieceCells, pieceExit } from './pieces.js';
+import { createTerrain, seedFrom } from './terrain.js';
 
 /**
  * Track format (also what the editor saves / shares):
@@ -53,7 +54,19 @@ export function compileTrack(track) {
   for (const pc of track.pieces) triCount += buildPieceLocal(pc.t, !!pc.m).positions.length / 9;
   const positions = new Float32Array(triCount * 9);
   const colors = new Float32Array(triCount * 9);
+  const uvs = new Float32Array(triCount * 6);
   let off = 0;
+  let uvOff = 0;
+  const boostPads = [];
+  const lamps = [];
+  const occupied = new Map();
+  for (const pc of track.pieces) {
+    for (const c of occupiedCells(pc)) {
+      const k = `${c.x},${c.z}`;
+      if (!occupied.has(k)) occupied.set(k, []);
+      occupied.get(k).push([c.y0, c.y1]);
+    }
+  }
 
   const gates = [];
   const triggers = [];
@@ -74,6 +87,18 @@ export function compileTrack(track) {
     }
     colors.set(local.colors, off);
     off += lp.length;
+    uvs.set(local.uvs, uvOff);
+    uvOff += local.uvs.length;
+
+    for (const pad of local.boostPads) boostPads.push({ center: tf(pad.center), size: pad.size, rot: pc.r });
+    // Street lamps on every third straight, alternating sides, where nothing else is next door.
+    if (local.lamps.length && (index % 3 === 0)) {
+      const lamp = local.lamps[(pc.x + pc.z) & 1];
+      const [nx, nz] = rotateXZ(Math.sign(lamp.pos[0]), 0, pc.r);
+      const neighbour = occupied.get(`${pc.x + nx},${pc.z + nz}`) || [];
+      const blocked = neighbour.some(([y0, y1]) => y0 < pc.y + 3 && pc.y - 1 < y1);
+      if (!blocked) lamps.push({ pos: tf(lamp.pos), side: lamp.side, rot: pc.r });
+    }
 
     for (const [a, b, c, s] of local.tris) world.addTriangle(tf(a), tf(b), tf(c), s);
 
@@ -100,14 +125,21 @@ export function compileTrack(track) {
     }
   });
   world.build();
+  const bounds = trackBounds(track);
+  const terrain = createTerrain(track.env || 'summer', bounds, seedFrom(track.name || 'track'), new Set(occupied.keys()));
+  world.terrain = terrain;
 
   let driveLine = null;
   if (track.route) driveLine = buildDriveLine(track);
 
   return {
+    terrain,
     track,
     positions,
     colors,
+    uvs,
+    boostPads,
+    lamps,
     world,
     gates,
     triggers,
@@ -116,7 +148,7 @@ export function compileTrack(track) {
     checkpointCount,
     finishCount,
     driveLine,
-    bounds: trackBounds(track),
+    bounds,
   };
 }
 
@@ -148,7 +180,7 @@ export function buildDriveLine(track) {
       const N = rotateDir(f.N, pc.r);
       const last = pts[pts.length - 1];
       if (last && Math.hypot(p[0] - last.p[0], p[1] - last.p[1], p[2] - last.p[2]) < 0.05) continue;
-      pts.push({ p, N, piece: step.i });
+      pts.push({ p, N, piece: step.i, surface: f.surface });
     }
   }
   return pts;

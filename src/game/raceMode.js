@@ -4,8 +4,10 @@ import { GHOST_HZ, PHYSICS_DT, PHYSICS_HZ } from '../core/constants.js';
 import { RaceSim } from '../core/race.js';
 import { compileTrack, occupiedCells } from '../core/track.js';
 import { CarModel } from './carModel.js';
+import { Effects, SpeedLines } from './effects.js';
 import { CAMERA_MODES, ChaseCamera } from './chaseCamera.js';
-import { buildEnvironment, seedFrom } from './environment.js';
+import { THEMES, buildEnvironment, seedFrom } from './environment.js';
+import { themeEnvMap } from './renderer.js';
 import { Hud, MEDALS, formatTime, medalFor, medalIcon } from './hud.js';
 import { isTouchDevice } from './input.js';
 import { b64ToFloats, floatsToB64, loadRecord, saveRecord } from './storage.js';
@@ -31,16 +33,17 @@ export class RaceMode {
     this.demo = demo;
     this.fromEditor = fromEditor;
     const settings = app.settings;
-    const shadows = settings.shadows;
+    const shadows = app.quality.shadows;
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(70, app.aspect, 0.1, 5000);
     this.compiled = compileTrack(track);
     this.env = buildEnvironment(track.env, {
-      bounds: this.compiled.bounds,
+      compiled: this.compiled,
       occupied: occupiedSet(track),
       seed: seedFrom(track.name || 'track'),
       shadows,
+      quality: app.quality,
     });
     this.scene.add(this.env.group);
     this.scene.fog = this.env.fog;
@@ -48,15 +51,31 @@ export class RaceMode {
     this.view = new TrackView(this.compiled, { shadows });
     this.scene.add(this.view.group);
 
-    this.carModel = new CarModel({ color: settings.carColor, accent: settings.accentColor, shadows });
+    this.envMap = themeEnvMap(app.renderer, THEMES[track.env] || THEMES.summer, track.env || 'summer');
+    this.carModel = new CarModel({
+      color: settings.carColor,
+      accent: settings.accentColor,
+      rim: settings.rimColor,
+      livery: settings.livery,
+      number: settings.carNumber,
+      shadows,
+      envMap: this.envMap,
+    });
     this.scene.add(this.carModel.group);
-    this.ghostModel = new CarModel({ ghost: true, color: '#ffffff', accent: '#9aa3b5' });
+    this.ghostModel = new CarModel({ ghost: true, color: '#ffffff', accent: '#9aa3b5', rim: '#ffffff', livery: 'plain' });
     this.ghostModel.group.visible = false;
     this.scene.add(this.ghostModel.group);
 
     this.sim = new RaceSim(this.compiled);
     this.chase = new ChaseCamera(this.camera);
     this.chase.setMode(demo ? 0 : settings.camera);
+    this.chase.fovOffset = settings.fovOffset || 0;
+    this.chase.shakeEnabled = settings.cameraShake && !demo;
+    this.effects = new Effects(this.scene, { env: track.env, quality: app.quality.particles, skidmarks: settings.skidmarks });
+    this.speedLines = new SpeedLines();
+    this.scene.add(this.camera);
+    this.camera.add(this.speedLines.lines);
+    this.boostLevel = 0;
 
     this.prevPos = new THREE.Vector3();
     this.prevQuat = new THREE.Quaternion();
@@ -104,7 +123,9 @@ export class RaceMode {
 
   restart() {
     this.sim.restart();
+    this.effects?.clear();
     this.view.resetCheckpoints();
+    this.view.setStartLights('red');
     this.ghostRec = [];
     this.recordGhostFrame();
     this.acc = 0;
@@ -144,6 +165,8 @@ export class RaceMode {
     this.prevPos.copy(this.sim.car.pos);
     this.prevQuat.copy(this.sim.car.quat);
     this.chase.snap(this.sim.car.pos, this.sim.car.quat);
+    this.effects.burst('respawn', this.sim.car.pos);
+    this.app.gfx.pulse(0x7fd8ff, 0.25);
     this.app.audio.respawn();
   }
 
@@ -347,9 +370,14 @@ export class RaceMode {
     switch (e.type) {
       case 'start':
         hud.hint('');
+        this.view.setStartLights('green');
+        setTimeout(() => !this.disposed && this.sim.started && this.view.setStartLights('off'), 2500);
         break;
       case 'checkpoint': {
         this.view.setCheckpoint(e.id, true);
+        const trig = this.compiled.triggers.find((t) => t.kind === 'checkpoint' && t.id === e.id);
+        if (trig) this.effects.burst('checkpoint', { x: trig.center[0], y: trig.center[1] - 2, z: trig.center[2] });
+        this.app.gfx.pulse(0x9fe8ff, 0.18);
         const t = e.ticks * PHYSICS_DT;
         const pb = this.record?.splits?.[e.index];
         const delta = pb != null ? t - pb : null;
@@ -362,9 +390,15 @@ export class RaceMode {
         hud.message(`Missing ${e.remaining} checkpoint${e.remaining > 1 ? 's' : ''}!`, 1800, 'warn');
         this.app.audio.missing();
         break;
-      case 'finish':
+      case 'finish': {
+        const trig = this.compiled.triggers.find((t) => t.kind === 'finish');
+        if (trig) this.effects.burst('finish', { x: trig.center[0], y: trig.center[1] - 3, z: trig.center[2] });
+        this.app.gfx.pulse(0xffffff, 0.3);
+        this.view.celebrate();
+        this.env.cheer(5);
         this.onFinish();
         break;
+      }
     }
   }
 
@@ -382,6 +416,22 @@ export class RaceMode {
     }
     const alpha = this.paused ? 1 : this.acc / PHYSICS_DT;
     this.carModel.syncPhysics(car, alpha, this.prevPos, this.prevQuat);
+    const input = this.lastInput || { throttle: 0, brake: 0 };
+    this.boostLevel = car.onBoost ? 1 : Math.max(0, this.boostLevel - dt * 1.6);
+    const fwdSpeed = car.forwardSpeed;
+    this.carModel.setLights(
+      { brake: input.brake > 0 && fwdSpeed > 0.5 ? 1 : 0, reverse: input.brake > 0 && fwdSpeed < -0.3, boost: this.boostLevel },
+      dt,
+    );
+    if (!this.paused) {
+      const scale = this.app.gfx.renderer.getDrawingBufferSize(_tmpV2).y / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)));
+      const fx = this.effects.update(dt, car, { throttle: input.throttle, brake: input.brake, boost: this.boostLevel, scale });
+      if (fx.landing) this.chase.addTrauma(Math.min(0.55, fx.landing * 0.035));
+      if (car.wallHit > 5) this.chase.addTrauma(Math.min(0.4, car.wallHit * 0.02));
+    }
+    const speedFx = !this.demo && this.app.settings.speedEffects ? car.speed : 0;
+    this.speedLines.update(dt, speedFx);
+    this.app.gfx.setSpeedEffect(Math.min(1, Math.max(0, (speedFx - 48) / 40)) * 0.7);
 
     // Ghost playback.
     const showGhost = !this.demo && this.app.settings.ghost && this.ghost && this.ghost.length >= 14;
@@ -401,9 +451,7 @@ export class RaceMode {
       // Fade the ghost when it overlaps the player.
       const d = p.distanceTo(this.carModel.group.position);
       const op = Math.min(0.38, Math.max(0.08, (d - 1.5) * 0.08));
-      this.ghostModel.group.traverse((o) => {
-        if (o.isMesh) o.material.opacity = op;
-      });
+      this.ghostModel.setOpacity(op);
     }
 
     // Camera.
@@ -416,7 +464,8 @@ export class RaceMode {
     } else {
       this.chase.update(dt, pos, quat, car.speed, car.grounded > 0);
     }
-    this.env.update(pos, dt);
+    this.env.update(pos, dt, this.camera);
+    this.view.update(dt);
 
     if (this.hud) {
       this.hud.setTime(sim.time);
@@ -439,7 +488,7 @@ export class RaceMode {
       }
     }
 
-    this.app.renderer.render(this.scene, this.camera);
+    this.app.render(this.scene, this.camera, dt);
   }
 
   resize(aspect) {
@@ -459,6 +508,9 @@ export class RaceMode {
     this.app.input.touchEl = null;
     document.body.classList.remove('touch');
     this.view.dispose();
+    this.effects.dispose();
+    this.speedLines.dispose();
+    this.app.gfx.setSpeedEffect(0);
     this.env.dispose();
     this.carModel.dispose();
     this.ghostModel.dispose();
@@ -466,5 +518,6 @@ export class RaceMode {
 }
 
 const _tmpV = new THREE.Vector3();
+const _tmpV2 = new THREE.Vector2();
 const _qa = new THREE.Quaternion();
 const _qb = new THREE.Quaternion();

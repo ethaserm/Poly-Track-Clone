@@ -32,15 +32,34 @@ function remove(key) {
 export const DEFAULT_SETTINGS = {
   carColor: '#e8402f',
   accentColor: '#1d1f27',
+  rimColor: '#c9ced8',
+  livery: 'stripe',
+  carNumber: 7,
   ghost: true,
   sound: true,
   volume: 0.6,
+  musicVolume: 0.35,
   camera: 0,
-  shadows: true,
+  quality: null,
+  showFps: false,
+  units: 'kmh',
+  fovOffset: 0,
+  cameraShake: true,
+  speedEffects: true,
+  minimap: true,
+  skidmarks: true,
+  playerName: 'Player',
 };
 
 export function loadSettings() {
-  return { ...DEFAULT_SETTINGS, ...read('settings', {}) };
+  const s = { ...DEFAULT_SETTINGS, ...read('settings', {}) };
+  if (!s.quality) {
+    // First run: be gentle on phones and small screens.
+    const touch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    s.quality = touch ? 'medium' : 'high';
+  }
+  delete s.shadows;
+  return s;
 }
 
 export function saveSettings(s) {

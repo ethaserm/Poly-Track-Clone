@@ -175,7 +175,7 @@ export class EditorMode {
     this.env = buildEnvironment(this.track.env, {
       bounds: { minX: -20, maxX: 20, minZ: -20, maxZ: 20 },
       seed: 7,
-      shadows: this.app.settings.shadows,
+      shadows: this.app.quality.shadows,
       decorCount: 0,
     });
     this.scene.add(this.env.group);
@@ -185,7 +185,7 @@ export class EditorMode {
   rebuildAll() {
     for (const o of this.objects) this.piecesGroup.remove(o);
     this.objects = this.track.pieces.map((pc) => {
-      const o = createPieceObject(pc, { shadows: this.app.settings.shadows });
+      const o = createPieceObject(pc, { shadows: this.app.quality.shadows });
       this.piecesGroup.add(o);
       return o;
     });
@@ -309,7 +309,7 @@ export class EditorMode {
       }
     }
     this.track.pieces.push(pc);
-    const o = createPieceObject(pc, { shadows: this.app.settings.shadows });
+    const o = createPieceObject(pc, { shadows: this.app.quality.shadows });
     this.piecesGroup.add(o);
     this.objects.push(o);
     this.app.audio.click();
@@ -819,7 +819,7 @@ export class EditorMode {
     }
     this.updateCamera();
     this.env.update(this.target, dt);
-    this.app.renderer.render(this.scene, this.camera);
+    this.app.render(this.scene, this.camera, dt);
   }
 
   resize(aspect) {

@@ -1,9 +1,9 @@
-import * as THREE from 'three';
 import { BUILTIN_TRACKS } from './core/tracks.js';
 import { decodeTrack } from './core/share.js';
 import { AudioFx } from './game/audio.js';
 import { EditorMode } from './game/editorMode.js';
 import { Input } from './game/input.js';
+import { GameRenderer } from './game/renderer.js';
 import { MenuMode } from './game/menuMode.js';
 import { RaceMode } from './game/raceMode.js';
 import { loadSettings, saveCustomTrack, saveSettings } from './game/storage.js';
@@ -16,12 +16,14 @@ class App {
     this.uiRoot = document.getElementById('ui');
     this.settings = loadSettings();
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.shadowMap.enabled = this.settings.shadows;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.container.appendChild(this.renderer.domElement);
+    this.gfx = new GameRenderer(this.container, this.settings.quality);
+    this.renderer = this.gfx.renderer;
+    this.fpsEl = document.createElement('div');
+    this.fpsEl.className = 'fps';
+    document.body.appendChild(this.fpsEl);
+    this.fpsFrames = 0;
+    this.fpsTime = 0;
+    this.applyFpsVisibility();
 
     this.input = new Input();
     this.audio = new AudioFx();
@@ -46,8 +48,27 @@ class App {
   resize() {
     this.width = window.innerWidth;
     this.height = window.innerHeight;
-    this.renderer.setSize(this.width, this.height);
+    this.gfx.setSize(this.width, this.height);
     this.mode?.resize?.(this.aspect);
+  }
+
+  /** Draw a frame through the post-processing pipeline. */
+  render(scene, camera, dt) {
+    this.gfx.render(scene, camera, dt);
+  }
+
+  get quality() {
+    return this.gfx.quality;
+  }
+
+  setQuality(name) {
+    this.settings.quality = name;
+    this.gfx.setQuality(name);
+    this.saveSettings();
+  }
+
+  applyFpsVisibility() {
+    this.fpsEl.style.display = this.settings.showFps ? '' : 'none';
   }
 
   setMode(mode) {
@@ -95,6 +116,15 @@ class App {
   loop(now) {
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
+    if (this.settings.showFps) {
+      this.fpsFrames++;
+      this.fpsTime += dt;
+      if (this.fpsTime >= 0.5) {
+        this.fpsEl.textContent = `${Math.round(this.fpsFrames / this.fpsTime)} FPS · ${this.gfx.quality.label}`;
+        this.fpsFrames = 0;
+        this.fpsTime = 0;
+      }
+    }
     try {
       this.mode?.frame(dt);
     } catch (err) {

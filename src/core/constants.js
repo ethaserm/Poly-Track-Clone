@@ -17,6 +17,9 @@ export const SURFACE = {
   GRASS: 1,
   BOOST: 2,
   WALL: 3,
+  ICE: 4,
+  DIRT: 5,
+  WATER: 6,
 };
 
 // Grid directions, index = rotation. Rotation r maps local +Z onto DIRS[r].

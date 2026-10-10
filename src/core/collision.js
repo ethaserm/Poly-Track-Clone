@@ -18,6 +18,7 @@ export class CollisionWorld {
     this.query = 0;
     this.groundY = 0;
     this.hasGround = true;
+    this.terrain = null; // optional { height(x,z), normal(x,z), surface(x,z) }
     this._candidates = [];
   }
 
@@ -134,12 +135,27 @@ export class CollisionWorld {
       hit.surface = d[o + 12];
     }
     if (this.hasGround && dy < -1e-6) {
-      const t = (this.groundY - oy) / dy;
+      const T = this.terrain;
+      let t = ((T ? T.height(ox, oz) : this.groundY) - oy) / dy;
+      let hx = ox;
+      let hz = oz;
+      if (T && t > 0) {
+        // Refine once at the estimated hit point (rays are short and nearly vertical).
+        hx = ox + dx * t;
+        hz = oz + dz * t;
+        t = (T.height(hx, hz) - oy) / dy;
+      }
       if (t >= -0.5 && t < best) {
         best = Math.max(t, 0);
         found = true;
-        hit.nx = 0; hit.ny = 1; hit.nz = 0;
-        hit.surface = SURFACE.GRASS;
+        if (T) {
+          const n = T.normal(hx, hz);
+          hit.nx = n[0]; hit.ny = n[1]; hit.nz = n[2];
+          hit.surface = T.surface(hx, hz);
+        } else {
+          hit.nx = 0; hit.ny = 1; hit.nz = 0;
+          hit.surface = SURFACE.GRASS;
+        }
       }
     }
     if (found) {
@@ -183,12 +199,19 @@ export class CollisionWorld {
       out.push(c);
       added++;
     }
-    if (this.hasGround && cy - r < this.groundY) {
+    const gy = this.terrain ? this.terrain.height(cx, cz) : this.groundY;
+    if (this.hasGround && cy - r < gy) {
       const c = pool[out.length] || (pool[out.length] = {});
-      c.nx = 0; c.ny = 1; c.nz = 0;
-      c.depth = this.groundY - (cy - r);
-      c.px = cx; c.py = this.groundY; c.pz = cz;
-      c.surface = SURFACE.GRASS;
+      if (this.terrain) {
+        const n = this.terrain.normal(cx, cz);
+        c.nx = n[0]; c.ny = n[1]; c.nz = n[2];
+        c.surface = this.terrain.surface(cx, cz);
+      } else {
+        c.nx = 0; c.ny = 1; c.nz = 0;
+        c.surface = SURFACE.GRASS;
+      }
+      c.depth = (gy - (cy - r)) * c.ny;
+      c.px = cx; c.py = gy; c.pz = cz;
       out.push(c);
       added++;
     }

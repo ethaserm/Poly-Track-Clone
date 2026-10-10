@@ -53,7 +53,14 @@ const SURFACE_PROPS = {
   [SURFACE.BOOST]: { grip: 1, engine: 1, drag: 0 },
   [SURFACE.WALL]: { grip: 0.9, engine: 1, drag: 0 },
   [SURFACE.GRASS]: { grip: 0.62, engine: 0.55, drag: 0.9 },
+  [SURFACE.ICE]: { grip: 0.22, engine: 0.5, drag: 0 },
+  [SURFACE.DIRT]: { grip: 0.72, engine: 0.85, drag: 0.12 },
+  [SURFACE.WATER]: { grip: 0.35, engine: 0.3, drag: 2.4 },
 };
+
+export function surfaceGrip(surface) {
+  return (SURFACE_PROPS[surface] || SURFACE_PROPS[SURFACE.ROAD]).grip;
+}
 
 const _v1 = new Vector3();
 const _v2 = new Vector3();
@@ -107,6 +114,13 @@ export class CarPhysics {
     this.onBoost = false;
     this.slip = 0;
     this.wallHit = 0;
+    this.scrape = 0; // fastest sliding body contact this tick (m/s)
+    this.scrapePoint = new Vector3();
+    this.scrapeSurface = SURFACE.WALL;
+    this.airTime = 0;
+    this.landings = 0; // increments on every landing after a jump
+    this.landImpact = 0; // speed into the ground at the last landing
+    this._preVel = new Vector3();
     this._hit = {};
     this._contacts = [];
     this._pool = [];
@@ -119,6 +133,7 @@ export class CarPhysics {
     if (vel) this.vel.copy(vel);
     this.angVel.set(0, 0, 0);
     this.steerAngle = 0;
+    this.airTime = 0;
     for (const w of this.wheels) {
       w.contact = false;
       w.comp = 0;
@@ -174,6 +189,8 @@ export class CarPhysics {
     const left = this.left;
     const fwdSpeed = this.vel.dot(fwd);
     const speed = this.vel.length();
+    const wasAirborne = this.grounded === 0;
+    this._preVel.copy(this.vel);
 
     // Steering: speed-sensitive maximum angle, smoothed.
     const k = Math.min(1, Math.max(0, fwdSpeed / CAR.steerFalloffSpeed));
@@ -219,6 +236,16 @@ export class CarPhysics {
         w.comp = 0;
         w.load = 0;
       }
+    }
+
+    if (this.grounded > 0) {
+      if (wasAirborne && this.airTime > 0.25) {
+        this.landings++;
+        this.landImpact = Math.max(0, -this._preVel.dot(up));
+      }
+      this.airTime = 0;
+    } else {
+      this.airTime += dt;
     }
 
     // --- Drive forces -----------------------------------------------------
@@ -324,6 +351,7 @@ export class CarPhysics {
 
     // --- Body collisions ---------------------------------------------------
     this.wallHit = 0;
+    this.scrape = 0;
     const contacts = this._contacts;
     for (const s of CAR.bodySpheres) {
       contacts.length = 0;
@@ -352,6 +380,14 @@ export class CarPhysics {
             const jt = Math.min(vtl / this.effMass(r, tdir), CAR.wallFriction * jn);
             this.applyImpulse(r, tdir, -jt);
           }
+        }
+        // Remember the fastest sliding contact (sparks / scrape sound).
+        const vs = this.pointVelocity(r, _v2);
+        const slide = vs.addScaledVector(n, -vs.dot(n)).length();
+        if (slide > this.scrape) {
+          this.scrape = slide;
+          this.scrapePoint.set(c.px, c.py, c.pz);
+          this.scrapeSurface = c.surface;
         }
       }
     }

@@ -1,4 +1,4 @@
-import { CAR } from './physics.js';
+import { CAR, surfaceGrip } from './physics.js';
 
 /**
  * Simple autopilot that follows a track's driving line. Used by the headless tests to prove
@@ -19,16 +19,18 @@ export class Bot {
       this.s[i] = this.s[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
     }
     // Lateral curvature (ignores vertical curvature such as loops and slopes).
+    this.gripAt = new Float64Array(n);
+    for (let i = 0; i < n; i++) this.gripAt[i] = surfaceGrip(driveLine[i].surface ?? 0);
     for (let i = 0; i < n; i++) {
       const i0 = Math.max(0, i - 2);
       const i1 = Math.min(n - 1, i + 2);
       const k = this.lateralCurvature(i0, i, i1);
-      this.vmax[i] = k > 1e-4 ? Math.sqrt(this.grip / k) : 999;
+      this.vmax[i] = k > 1e-4 ? Math.sqrt((this.grip * this.gripAt[i]) / k) : 999;
     }
-    // Backward pass: respect braking distance.
+    // Backward pass: respect braking distance (less braking on slippery surfaces).
     for (let i = n - 2; i >= 0; i--) {
       const ds = this.s[i + 1] - this.s[i];
-      this.vmax[i] = Math.min(this.vmax[i], Math.sqrt(this.vmax[i + 1] ** 2 + 2 * this.brake * ds));
+      this.vmax[i] = Math.min(this.vmax[i], Math.sqrt(this.vmax[i + 1] ** 2 + 2 * this.brake * this.gripAt[i] * ds));
     }
     this.idx = 0;
     this.stuck = 0;

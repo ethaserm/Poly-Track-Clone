@@ -20,6 +20,29 @@ export class ChaseCamera {
     this.up = new THREE.Vector3(0, 1, 0);
     this.fov = 70;
     this.orbit = 0;
+    this.fovOffset = 0;
+    this.trauma = 0;
+    this.shakeEnabled = true;
+    this.shakeTime = 0;
+    this.lookBack = false;
+  }
+
+  /** Add camera shake (0..1). Shake strength is trauma squared, so small bumps stay subtle. */
+  addTrauma(t) {
+    if (this.shakeEnabled) this.trauma = Math.min(1, this.trauma + t);
+  }
+
+  applyShake(dt) {
+    if (this.trauma <= 0) return;
+    this.shakeTime += dt;
+    const s = this.trauma * this.trauma;
+    const t = this.shakeTime * 32;
+    const cam = this.camera;
+    cam.position.x += Math.sin(t * 1.1) * Math.cos(t * 0.37) * 0.32 * s;
+    cam.position.y += Math.sin(t * 1.7 + 1.3) * 0.26 * s;
+    cam.position.z += Math.cos(t * 0.9 + 2.1) * Math.sin(t * 0.53) * 0.32 * s;
+    cam.rotateZ(Math.sin(t * 1.3 + 0.5) * 0.025 * s);
+    this.trauma = Math.max(0, this.trauma - dt * 1.4);
   }
 
   setMode(i) {
@@ -56,9 +79,11 @@ export class ChaseCamera {
       cam.lookAt(_target);
     }
 
+    this.applyShake(dt);
+
     // Portrait screens get a wider vertical FOV so the road stays visible.
     const portrait = cam.aspect < 1 ? Math.min(22, (1 / cam.aspect - 1) * 18) : 0;
-    const targetFov = m.fov + portrait + Math.min(24, Math.max(0, speed - 15) * 0.22);
+    const targetFov = m.fov + this.fovOffset + portrait + Math.min(24, Math.max(0, speed - 15) * 0.22);
     this.fov += (targetFov - this.fov) * (snap ? 1 : 1 - Math.exp(-dt * 3));
     if (Math.abs(cam.fov - this.fov) > 0.01) {
       cam.fov = this.fov;
