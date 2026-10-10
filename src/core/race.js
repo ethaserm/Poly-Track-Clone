@@ -30,6 +30,7 @@ export class RaceSim {
     this.lastCheckpoint = null;
     this.respawns = 0;
     this.events = [];
+    this._warned = false;
   }
 
   respawn() {

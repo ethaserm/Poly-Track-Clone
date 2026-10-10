@@ -243,7 +243,7 @@ export function buildPieceLocal(type, mirror = false) {
     if (sw.boost) addBoostArrows(mb, frames);
   }
 
-  if (def.gate) addGatePosts(mb, def.gate);
+  if (def.gate) addGatePosts(mb);
 
   const data = {
     positions: new Float32Array(mb.positions),
@@ -285,7 +285,7 @@ function addBoostArrows(mb, frames) {
   }
 }
 
-function addGatePosts(mb, kind) {
+function addGatePosts(mb) {
   const postColor = COLORS.post;
   const x = WALL_OUTER + 0.4;
   mb.box(-x, DECK + 3, 0, 0.35, 3, 0.35, postColor);
@@ -293,7 +293,6 @@ function addGatePosts(mb, kind) {
   // Foot blocks
   mb.box(-x, DECK + 0.3, 0, 0.6, 0.3, 0.6, postColor);
   mb.box(x, DECK + 0.3, 0, 0.6, 0.3, 0.6, postColor);
-  void kind;
 }
 
 /** Footprint, exit and occupancy after rotation/mirroring. */
