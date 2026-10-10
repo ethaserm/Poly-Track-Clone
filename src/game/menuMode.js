@@ -7,7 +7,7 @@ import { RaceMode } from './raceMode.js';
 import { trackPreview } from './trackScene.js';
 import { QUALITY_PRESETS } from './renderer.js';
 import { deleteCustomTrack, loadCustomTracks, loadRecord, loadRuns, loadStats, resetProgress } from './storage.js';
-import { copyText, escapeHtml, h, openPanel, toast } from './ui.js';
+import { confirmPanel, copyText, escapeHtml, h, openPanel, toast } from './ui.js';
 
 const ENV_GRADIENT = {
   summer: 'linear-gradient(135deg,#5fb85a,#3f8fd8)',
@@ -370,11 +370,18 @@ export class MenuMode {
         break;
       }
       case 'resetProgress':
-        if (confirm('Erase all best times, ghosts, leaderboards and stats? Saved tracks and settings are kept.')) {
-          resetProgress();
-          this.show('stats');
-          toast(app.uiRoot, 'Progress reset');
-        }
+        this.panel = confirmPanel(app.uiRoot, {
+          title: 'Reset progress?',
+          message: 'Erase all best times, ghosts, leaderboards and stats? Saved tracks and settings are kept.',
+          ok: 'Erase',
+          danger: true,
+          onClose: () => (this.panel = null),
+          onConfirm: () => {
+            resetProgress();
+            this.show('stats');
+            toast(app.uiRoot, 'Progress reset');
+          },
+        });
         break;
       case 'playCustom': {
         const t = loadCustomTracks().find((x) => x.id === el.dataset.id);
@@ -408,10 +415,18 @@ export class MenuMode {
       }
       case 'deleteCustom': {
         const t = loadCustomTracks().find((x) => x.id === el.dataset.id);
-        if (t && confirm(`Delete “${t.name}”? This cannot be undone.`)) {
-          deleteCustomTrack(t.id);
-          this.show('custom');
-        }
+        if (!t) return;
+        this.panel = confirmPanel(app.uiRoot, {
+          title: 'Delete track?',
+          message: `Delete “${t.name}”? This cannot be undone.`,
+          ok: 'Delete',
+          danger: true,
+          onClose: () => (this.panel = null),
+          onConfirm: () => {
+            deleteCustomTrack(t.id);
+            this.show('custom');
+          },
+        });
         break;
       }
       case 'import':

@@ -6,7 +6,7 @@ import { occupiedCells } from '../core/track.js';
 import { buildEnvironment, THEMES } from './environment.js';
 import { clearDraft, loadDraft, saveDraft } from './storage.js';
 import { createPieceObject, placePieceObject } from './trackView.js';
-import { copyText, escapeHtml, h, openPanel, toast } from './ui.js';
+import { confirmPanel, copyText, escapeHtml, h, isFramed, openPanel, toast } from './ui.js';
 
 const MAX_LEVEL = 40;
 const MAX_CELL = 80;
@@ -658,12 +658,31 @@ export class EditorMode {
       ${this.dirty ? '<div class="muted">● unsaved</div>' : ''}`;
   }
 
+  newTrack() {
+    this.snapshot();
+    this.track = { name: 'My Track', env: this.track.env, pieces: [] };
+    this.topEl.querySelector('.ed-name').value = this.track.name;
+    this.dirty = false;
+    clearDraft();
+    this.selection.clear();
+    this.rebuildAll();
+    this.updatePreview();
+  }
+
   async action(a) {
     const app = this.app;
     app.audio.click();
     switch (a) {
       case 'back':
-        if (this.dirty && this.track.pieces.length && !confirm('Leave the editor? Your work stays as an autosaved draft until you save or start a new track.')) return;
+        if (this.dirty && this.track.pieces.length) {
+          this.panel = confirmPanel(app.uiRoot, {
+            title: 'Leave editor?',
+            message: 'Your work stays as an autosaved draft until you save or start a new track.',
+            ok: 'Leave',
+            onConfirm: () => app.showMenu(),
+          });
+          return;
+        }
         app.showMenu();
         break;
       case 'undo':
@@ -679,15 +698,17 @@ export class EditorMode {
         this.infoPanel();
         break;
       case 'new':
-        if (this.track.pieces.length && !confirm('Start a new empty track? Unsaved changes will be lost.')) return;
-        this.snapshot();
-        this.track = { name: 'My Track', env: this.track.env, pieces: [] };
-        this.topEl.querySelector('.ed-name').value = this.track.name;
-        this.dirty = false;
-        clearDraft();
-        this.selection.clear();
-        this.rebuildAll();
-        this.updatePreview();
+        if (this.track.pieces.length) {
+          this.panel = confirmPanel(app.uiRoot, {
+            title: 'New track?',
+            message: 'Start a new empty track? Unsaved changes will be lost.',
+            ok: 'Start new',
+            danger: true,
+            onConfirm: () => this.newTrack(),
+          });
+          return;
+        }
+        this.newTrack();
         break;
       case 'save':
         this.save();
@@ -774,7 +795,7 @@ export class EditorMode {
        <textarea class="code" readonly rows="5">${code}</textarea>
        <div class="btn-row">
          <button class="btn primary" data-action="copy">Copy code</button>
-         <button class="btn" data-action="link">Copy play link</button>
+         ${isFramed() ? '' : '<button class="btn" data-action="link">Copy play link</button>'}
          <button class="btn" data-action="close">Close</button>
        </div>`,
       {
